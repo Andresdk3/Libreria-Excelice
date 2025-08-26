@@ -89,6 +89,8 @@ extern "C" {
 
 extern __declspec(dllexport) int OpenExcel(char* filename);
 extern __declspec(dllexport) int WriteCell(char* sheet, char* cell, char* value);
+
+//export CopyRange
 extern __declspec(dllexport) int CopyRange(char* srcSheet, char* dstSheet, int startRow, int endRow, int startCol, int endCol);
 extern __declspec(dllexport) int SaveExcel(char* filename);
 

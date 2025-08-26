@@ -46,33 +46,45 @@ func WriteCell(sheet, cell, value *C.char) C.int {
 }
 
 //export CopyRange
+//export CopyRange
 func CopyRange(srcSheet *C.char, dstSheet *C.char, startRow, endRow, startCol, endCol C.int) C.int {
-	mu.Lock()
-	defer mu.Unlock()
+    mu.Lock()
+    defer mu.Unlock()
 
-	if f == nil {
-		return -1
+    if f == nil {
+        return -1
+    }
+
+    src := C.GoString(srcSheet)
+    dst := C.GoString(dstSheet)
+
+    // ✅ Verificar si la hoja destino existe
+    index, err := f.GetSheetIndex(dst)
+    if err != nil { // If an error occurs, it means the sheet does not exist
+        f.NewSheet(dst) // Crear la hoja destino solo si no existe
+    }
+	if index == -1 {
+		f.NewSheet(dst)
 	}
 
-	src := C.GoString(srcSheet)
-	dst := C.GoString(dstSheet)
+    // Recorrer rango fila/columna
+    for i := int(startRow); i <= int(endRow); i++ {
+        for j := int(startCol); j <= int(endCol); j++ {
+            cell, _ := excelize.CoordinatesToCellName(j, i)
+            val, _ := f.GetCellValue(src, cell)
+            styleID, _ := f.GetCellStyle(src, cell)
 
-	for i := int(startRow); i <= int(endRow); i++ {
-		for j := int(startCol); j <= int(endCol); j++ {
-			cell, _ := excelize.CoordinatesToCellName(j, i)
-			val, _ := f.GetCellValue(src, cell)
-			styleID, _ := f.GetCellStyle(src, cell)
-
-			// Copiar a la misma posición pero en otra hoja
-			dstCell, _ := excelize.CoordinatesToCellName(j, i)
-			f.SetCellValue(dst, dstCell, val)
-			if styleID != 0 {
-				f.SetCellStyle(dst, dstCell, dstCell, styleID)
-			}
-		}
-	}
-	return 0
+            // Copiar valor y estilo
+            dstCell, _ := excelize.CoordinatesToCellName(j, i)
+            f.SetCellValue(dst, dstCell, val)
+            if styleID != 0 {
+                f.SetCellStyle(dst, dstCell, dstCell, styleID)
+            }
+        }
+    }
+    return 0
 }
+
 
 //export SaveExcel
 func SaveExcel(filename *C.char) C.int {
