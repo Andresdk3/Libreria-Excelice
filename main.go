@@ -17,33 +17,50 @@ var (
 )
 
 //export OpenExcel
+//export OpenExcel
 func OpenExcel(filename *C.char) C.int {
-	mu.Lock()
-	defer mu.Unlock()
+    mu.Lock()
+    defer mu.Unlock()
 
-	var err error
-	f, err = excelize.OpenFile(C.GoString(filename))
-	if err != nil {
-		// Si no existe, creamos uno nuevo
-		f = excelize.NewFile()
-	}
-	return 0
+    var err error
+    f, err = excelize.OpenFile(C.GoString(filename))
+    if err != nil {
+        // ⚠️ Aquí mejor NO crear archivo nuevo,
+        // porque sobrescribirías datos previos.
+        return -1
+    }
+    return 0
 }
 
 //export WriteCell
+//export WriteCell
 func WriteCell(sheet, cell, value *C.char) C.int {
-	mu.Lock()
-	defer mu.Unlock()
+    mu.Lock()
+    defer mu.Unlock()
 
-	if f == nil {
-		return -1
-	}
-	err := f.SetCellValue(C.GoString(sheet), C.GoString(cell), C.GoString(value))
-	if err != nil {
-		return -2
-	}
-	return 0
+    if f == nil {
+        return -1
+    }
+
+    sheetName := C.GoString(sheet)
+
+    // ✅ Verificar si la hoja existe
+	index, error := f.GetSheetIndex(sheetName)
+    if index == -1 {
+        f.NewSheet(sheetName) // Solo la creamos si no existe
+    }
+	if error != nil {
+		f.NewSheet(sheetName)
+    }
+
+    // Escribir el valor en la celda
+    err := f.SetCellValue(sheetName, C.GoString(cell), C.GoString(value))
+    if err != nil {
+        return -2
+    }
+    return 0
 }
+
 
 //export CopyRange
 //export CopyRange
