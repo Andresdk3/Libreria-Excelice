@@ -2,12 +2,14 @@ package main
 
 /*
 #include <stdlib.h>
+#include <stdbool.h>
 */
 import "C"
 
 import (
-	"github.com/xuri/excelize/v2"
 	"sync"
+
+	"github.com/xuri/excelize/v2"
 )
 
 // ExcelHandler almacena los archivos en memoria
@@ -137,7 +139,8 @@ func OpenExcelDst(filename *C.char) C.int {
 
 //export CopyRangeBetweenBooks
 func CopyRangeBetweenBooks(srcSheet, dstSheet *C.char,
-	startRow, endRow, startCol, endCol, dstStartRow, dstStartCol C.int) C.int {
+	startRow, endRow, startCol, endCol,
+	dstStartRow, dstStartCol C.int, formulas C.bool) C.int {
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -156,18 +159,23 @@ func CopyRangeBetweenBooks(srcSheet, dstSheet *C.char,
 
 	for i := int(startRow); i <= int(endRow); i++ {
 		for j := int(startCol); j <= int(endCol); j++ {
-			// Celda origen
 			cell, _ := excelize.CoordinatesToCellName(j, i)
-			val, _ := fSrc.GetCellValue(src, cell)
-			styleID, _ := fSrc.GetCellStyle(src, cell)
 
-			// Calcular posición de pegado
+			styleID, _ := fSrc.GetCellStyle(src, cell)
+			formula, _ := fSrc.GetCellFormula(src, cell)
+
+			// Celda destino
 			dstRow := int(dstStartRow) + (i - int(startRow))
 			dstCol := int(dstStartCol) + (j - int(startCol))
 			dstCell, _ := excelize.CoordinatesToCellName(dstCol, dstRow)
 
-			// Copiar valor y estilo
-			fDst.SetCellValue(dst, dstCell, val)
+			if formulas && formula != "" {
+				fDst.SetCellFormula(dst, dstCell, formula)
+			} else {
+				val, _ := fSrc.GetCellValue(src, cell)
+				fDst.SetCellValue(dst, dstCell, val)
+			}
+
 			if styleID != 0 {
 				fDst.SetCellStyle(dst, dstCell, dstCell, styleID)
 			}
@@ -176,6 +184,50 @@ func CopyRangeBetweenBooks(srcSheet, dstSheet *C.char,
 	return 0
 }
 
+//export CopySheetBetweenBooks
+func CopySheetBetweenBooks(srcSheet, dstSheet *C.char, formulas C.bool) C.int {
+	mu.Lock()
+	defer mu.Unlock()
+
+	if fSrc == nil || fDst == nil {
+		return -1
+	}
+
+	src := C.GoString(srcSheet)
+	dst := C.GoString(dstSheet)
+
+	index, err := fDst.GetSheetIndex(dst)
+	if index == -1 || err != nil {
+		fDst.NewSheet(dst)
+	}
+
+	rows, err := fSrc.GetRows(src)
+	if err != nil {
+		return -2
+	}
+
+	for i, row := range rows {
+		for j := range row {
+			cell, _ := excelize.CoordinatesToCellName(j+1, i+1)
+
+			styleID, _ := fSrc.GetCellStyle(src, cell)
+			formula, _ := fSrc.GetCellFormula(src, cell)
+
+			if formulas && formula != "" {
+				fDst.SetCellFormula(dst, cell, formula)
+			} else {
+				val, _ := fSrc.GetCellValue(src, cell)
+				fDst.SetCellValue(dst, cell, val)
+			}
+
+			if styleID != 0 {
+				fDst.SetCellStyle(dst, cell, cell, styleID)
+			}
+		}
+	}
+
+	return 0
+}
 
 //export SaveExcelDst
 func SaveExcelDst(filename *C.char) C.int {

@@ -24,10 +24,13 @@ lib.CopyRangeBetweenBooks.argtypes = [
     ctypes.c_char_p, ctypes.c_char_p,  # srcSheet, dstSheet
     ctypes.c_int, ctypes.c_int,        # startRow, endRow
     ctypes.c_int, ctypes.c_int,        # startCol, endCol
-    ctypes.c_int, ctypes.c_int         # dstStartRow, dstStartCol
+    ctypes.c_int, ctypes.c_int,        # dstStartRow, dstStartCol
+    ctypes.c_bool                      # formulas
 ]
-
 lib.CopyRangeBetweenBooks.restype = ctypes.c_int
+
+lib.CopySheetBetweenBooks.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_bool]
+lib.CopySheetBetweenBooks.restype = ctypes.c_int
 
 # Guardar destino
 lib.SaveExcelDst.argtypes = [ctypes.c_char_p]
@@ -72,9 +75,10 @@ else:
         # Copiar A1:E10 de Sheet3 → pegar en Sheet1 comenzando en C5
         res = lib.CopyRangeBetweenBooks(
             b"Sheet3", b"Sheet1",
-            5, 11,   # Rango origen filas 5-11
-            3, 7,    # Rango origen columnas 1-5 (A-E)
-            16, 1     # Celda inicio destino = fila 16, columna 3 → C16
+            1, 10,   # Rango origen filas 1-10
+            1, 5,    # Rango origen columnas 1-5 (A-E)
+            5, 3,    # Celda inicio destino = fila 5, columna 3 → C5
+            True     # Incluir fórmulas
         )
 
         if res == 0:
@@ -88,3 +92,12 @@ else:
             print("✅ Archivo destino guardado")
         else:
             print("❌ Error al guardar destino:", res)
+
+res = lib.CopySheetBetweenBooks(b"Sheet3", b"Sheet_copy", True)
+if res == 0:
+    print("✅ Hoja copiada correctamente")
+else:
+    print("❌ Error al copiar hoja:", res)
+
+# Guardar destino
+lib.SaveExcelDst(b"demo_salida_nueva.xlsx")

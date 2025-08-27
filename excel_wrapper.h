@@ -24,6 +24,7 @@ extern const char *_GoStringPtr(_GoString_ s);
 #line 3 "main.go"
 
 #include <stdlib.h>
+#include <stdbool.h>
 
 #line 1 "cgo-generated-wrapper"
 
@@ -93,7 +94,8 @@ extern __declspec(dllexport) int CopyRange(char* srcSheet, char* dstSheet, int s
 extern __declspec(dllexport) int SaveExcel(char* filename);
 extern __declspec(dllexport) int OpenExcelSrc(char* filename);
 extern __declspec(dllexport) int OpenExcelDst(char* filename);
-extern __declspec(dllexport) int CopyRangeBetweenBooks(char* srcSheet, char* dstSheet, int startRow, int endRow, int startCol, int endCol, int dstStartRow, int dstStartCol);
+extern __declspec(dllexport) int CopyRangeBetweenBooks(char* srcSheet, char* dstSheet, int startRow, int endRow, int startCol, int endCol, int dstStartRow, int dstStartCol, _Bool formulas);
+extern __declspec(dllexport) int CopySheetBetweenBooks(char* srcSheet, char* dstSheet, _Bool formulas);
 extern __declspec(dllexport) int SaveExcelDst(char* filename);
 
 #ifdef __cplusplus
