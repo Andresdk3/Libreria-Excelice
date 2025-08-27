@@ -87,16 +87,14 @@ typedef struct { void *data; GoInt len; GoInt cap; } GoSlice;
 extern "C" {
 #endif
 
-
-//export OpenExcel
 extern __declspec(dllexport) int OpenExcel(char* filename);
-
-//export WriteCell
 extern __declspec(dllexport) int WriteCell(char* sheet, char* cell, char* value);
-
-//export CopyRange
 extern __declspec(dllexport) int CopyRange(char* srcSheet, char* dstSheet, int startRow, int endRow, int startCol, int endCol);
 extern __declspec(dllexport) int SaveExcel(char* filename);
+extern __declspec(dllexport) int OpenExcelSrc(char* filename);
+extern __declspec(dllexport) int OpenExcelDst(char* filename);
+extern __declspec(dllexport) int CopyRangeBetweenBooks(char* srcSheet, char* dstSheet, int startRow, int endRow, int startCol, int endCol, int dstStartRow, int dstStartCol);
+extern __declspec(dllexport) int SaveExcelDst(char* filename);
 
 #ifdef __cplusplus
 }

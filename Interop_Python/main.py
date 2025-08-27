@@ -10,14 +10,35 @@ lib.CopyRange.argtypes = [ctypes.c_char_p, ctypes.c_char_p,
                           ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int]
 lib.SaveExcel.argtypes = [ctypes.c_char_p]
 
-# 1. Abrir archivo (si no existe, se crea en memoria)
+
+# Abrir libro ORIGEN
+lib.OpenExcelSrc.argtypes = [ctypes.c_char_p]
+lib.OpenExcelSrc.restype = ctypes.c_int
+
+# Abrir libro DESTINO
+lib.OpenExcelDst.argtypes = [ctypes.c_char_p]
+lib.OpenExcelDst.restype = ctypes.c_int
+
+# Copiar rango entre libros
+lib.CopyRangeBetweenBooks.argtypes = [
+    ctypes.c_char_p, ctypes.c_char_p,  # srcSheet, dstSheet
+    ctypes.c_int, ctypes.c_int,        # startRow, endRow
+    ctypes.c_int, ctypes.c_int,        # startCol, endCol
+    ctypes.c_int, ctypes.c_int         # dstStartRow, dstStartCol
+]
+
+lib.CopyRangeBetweenBooks.restype = ctypes.c_int
+
+# Guardar destino
+lib.SaveExcelDst.argtypes = [ctypes.c_char_p]
+lib.SaveExcelDst.restype = ctypes.c_int
+
+# 1. Abrir archivo
 res = lib.OpenExcel(b"demo_salida.xlsx")
 
 if res != 0:
     print("❌ Error: no se pudo abrir el archivo demo.xlsx")
-else:
-    print("✅ Archivo abierto correctamente")
-
+else:    
     # 2. Escribir valores en una hoja
     lib.WriteCell(b"Sheet1", b"A1", b"Nombre")
     lib.WriteCell(b"Sheet1", b"B1", b"Edad")
@@ -33,3 +54,37 @@ else:
     lib.SaveExcel(b"demo_salida_nueva.xlsx")
 
     print("Excel modificado y guardado como demo_salida.xlsx")
+
+
+# 1. Abrir el libro origen
+res = lib.OpenExcelSrc(b"demo_salida.xlsx")
+if res != 0:
+    print("❌ Error al abrir libro origen")
+    exit()
+else:
+    # 2. Abrir el libro destino (si no existe, se crea nuevo)
+    res = lib.OpenExcelDst(b"demo_salida_nueva.xlsx")
+    if res != 0:
+        print("❌ Error al abrir/crear libro destino")
+        exit()
+    else:
+        # 3. Copiar rango A1:E10 de Sheet1 → Sheet2
+        # Copiar A1:E10 de Sheet3 → pegar en Sheet1 comenzando en C5
+        res = lib.CopyRangeBetweenBooks(
+            b"Sheet3", b"Sheet1",
+            5, 11,   # Rango origen filas 5-11
+            3, 7,    # Rango origen columnas 1-5 (A-E)
+            16, 1     # Celda inicio destino = fila 16, columna 3 → C16
+        )
+
+        if res == 0:
+            print("✅ Rango copiado correctamente")
+        else:
+            print("❌ Error al copiar rango:", res)
+
+        # 4. Guardar el libro destino con los cambios
+        res = lib.SaveExcelDst(b"demo_salida_nueva.xlsx")
+        if res == 0:
+            print("✅ Archivo destino guardado")
+        else:
+            print("❌ Error al guardar destino:", res)

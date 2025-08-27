@@ -10,98 +10,85 @@ import (
 	"sync"
 )
 
-// ExcelHandler almacena el archivo en memoria
+// ExcelHandler almacena los archivos en memoria
 var (
-	f      *excelize.File
-	mu     sync.Mutex // control concurrente si se llama desde varios hilos
+	f    *excelize.File // libro único (para compatibilidad con tus funciones previas)
+	fSrc *excelize.File // libro origen
+	fDst *excelize.File // libro destino
+	mu   sync.Mutex
 )
 
-//export OpenExcel
+// ============================================================
+// Funciones sobre un único libro (compatibles con tu código actual)
+// ============================================================
+
 //export OpenExcel
 func OpenExcel(filename *C.char) C.int {
-    mu.Lock()
-    defer mu.Unlock()
+	mu.Lock()
+	defer mu.Unlock()
 
-    var err error
-    f, err = excelize.OpenFile(C.GoString(filename))
-    if err != nil {
-        // ⚠️ Aquí mejor NO crear archivo nuevo,
-        // porque sobrescribirías datos previos.
-        return -1
-    }
-    return 0
+	var err error
+	f, err = excelize.OpenFile(C.GoString(filename))
+	if err != nil {
+		return -1
+	}
+	return 0
 }
 
-//export WriteCell
 //export WriteCell
 func WriteCell(sheet, cell, value *C.char) C.int {
-    mu.Lock()
-    defer mu.Unlock()
+	mu.Lock()
+	defer mu.Unlock()
 
-    if f == nil {
-        return -1
-    }
+	if f == nil {
+		return -1
+	}
 
-    sheetName := C.GoString(sheet)
+	sheetName := C.GoString(sheet)
 
-    // ✅ Verificar si la hoja existe
-	index, error := f.GetSheetIndex(sheetName)
-    if index == -1 {
-        f.NewSheet(sheetName) // Solo la creamos si no existe
-    }
-	if error != nil {
+	index, err := f.GetSheetIndex(sheetName)
+	if index == -1 || err != nil {
 		f.NewSheet(sheetName)
-    }
+	}
 
-    // Escribir el valor en la celda
-    err := f.SetCellValue(sheetName, C.GoString(cell), C.GoString(value))
-    if err != nil {
-        return -2
-    }
-    return 0
+	if err := f.SetCellValue(sheetName, C.GoString(cell), C.GoString(value)); err != nil {
+		return -2
+	}
+	return 0
 }
 
-
-//export CopyRange
 //export CopyRange
 func CopyRange(srcSheet *C.char, dstSheet *C.char, startRow, endRow, startCol, endCol C.int) C.int {
-    mu.Lock()
-    defer mu.Unlock()
+	mu.Lock()
+	defer mu.Unlock()
 
-    if f == nil {
-        return -1
-    }
+	if f == nil {
+		return -1
+	}
 
-    src := C.GoString(srcSheet)
-    dst := C.GoString(dstSheet)
+	src := C.GoString(srcSheet)
+	dst := C.GoString(dstSheet)
 
-    // ✅ Verificar si la hoja destino existe
-    index, err := f.GetSheetIndex(dst)
-    if err != nil { // If an error occurs, it means the sheet does not exist
-        f.NewSheet(dst) // Crear la hoja destino solo si no existe
-    }
-	if index == -1 {
+	index, err := f.GetSheetIndex(dst)
+	if index == -1 || err != nil {
 		f.NewSheet(dst)
 	}
 
-    // Recorrer rango fila/columna
-    for i := int(startRow); i <= int(endRow); i++ {
-        for j := int(startCol); j <= int(endCol); j++ {
-            cell, _ := excelize.CoordinatesToCellName(j, i)
-            val, _ := f.GetCellValue(src, cell)
-            styleID, _ := f.GetCellStyle(src, cell)
+	for i := int(startRow); i <= int(endRow); i++ {
+		for j := int(startCol); j <= int(endCol); j++ {
+			cell, _ := excelize.CoordinatesToCellName(j, i)
+			val, _ := f.GetCellValue(src, cell)
+			styleID, _ := f.GetCellStyle(src, cell)
 
-            // Copiar valor y estilo
-            dstCell, _ := excelize.CoordinatesToCellName(j, i)
-            f.SetCellValue(dst, dstCell, val)
-            if styleID != 0 {
-                f.SetCellStyle(dst, dstCell, dstCell, styleID)
-            }
-        }
-    }
-    return 0
+			dstCell, _ := excelize.CoordinatesToCellName(j, i)
+			f.SetCellValue(dst, dstCell, val)
+			if styleID != 0 {
+				f.SetCellStyle(dst, dstCell, dstCell, styleID)
+			}
+		}
+	}
+	return 0
 }
-
 
 //export SaveExcel
 func SaveExcel(filename *C.char) C.int {
@@ -112,6 +99,93 @@ func SaveExcel(filename *C.char) C.int {
 		return -1
 	}
 	if err := f.SaveAs(C.GoString(filename)); err != nil {
+		return -2
+	}
+	return 0
+}
+
+// ============================================================
+// NUEVO: manejo de dos libros para copiar entre archivos
+// ============================================================
+
+//export OpenExcelSrc
+func OpenExcelSrc(filename *C.char) C.int {
+	mu.Lock()
+	defer mu.Unlock()
+
+	var err error
+	fSrc, err = excelize.OpenFile(C.GoString(filename))
+	if err != nil {
+		return -1
+	}
+	return 0
+}
+
+//export OpenExcelDst
+func OpenExcelDst(filename *C.char) C.int {
+	mu.Lock()
+	defer mu.Unlock()
+
+	var err error
+	fDst, err = excelize.OpenFile(C.GoString(filename))
+	if err != nil {
+		// si no existe, crear nuevo
+		fDst = excelize.NewFile()
+	}
+	return 0
+}
+
+//export CopyRangeBetweenBooks
+func CopyRangeBetweenBooks(srcSheet, dstSheet *C.char,
+	startRow, endRow, startCol, endCol, dstStartRow, dstStartCol C.int) C.int {
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	if fSrc == nil || fDst == nil {
+		return -1
+	}
+
+	src := C.GoString(srcSheet)
+	dst := C.GoString(dstSheet)
+
+	index, err := fDst.GetSheetIndex(dst)
+	if index == -1 || err != nil {
+		fDst.NewSheet(dst)
+	}
+
+	for i := int(startRow); i <= int(endRow); i++ {
+		for j := int(startCol); j <= int(endCol); j++ {
+			// Celda origen
+			cell, _ := excelize.CoordinatesToCellName(j, i)
+			val, _ := fSrc.GetCellValue(src, cell)
+			styleID, _ := fSrc.GetCellStyle(src, cell)
+
+			// Calcular posición de pegado
+			dstRow := int(dstStartRow) + (i - int(startRow))
+			dstCol := int(dstStartCol) + (j - int(startCol))
+			dstCell, _ := excelize.CoordinatesToCellName(dstCol, dstRow)
+
+			// Copiar valor y estilo
+			fDst.SetCellValue(dst, dstCell, val)
+			if styleID != 0 {
+				fDst.SetCellStyle(dst, dstCell, dstCell, styleID)
+			}
+		}
+	}
+	return 0
+}
+
+
+//export SaveExcelDst
+func SaveExcelDst(filename *C.char) C.int {
+	mu.Lock()
+	defer mu.Unlock()
+
+	if fDst == nil {
+		return -1
+	}
+	if err := fDst.SaveAs(C.GoString(filename)); err != nil {
 		return -2
 	}
 	return 0
