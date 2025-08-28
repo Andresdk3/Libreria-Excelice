@@ -97,6 +97,7 @@ extern int OpenExcelDst(char* filename);
 extern int CopyRangeBetweenBooks(char* srcSheet, char* dstSheet, int startRow, int endRow, int startCol, int endCol, int dstStartRow, int dstStartCol, _Bool formulas);
 extern int CopySheetBetweenBooks(char* srcSheet, char* dstSheet, _Bool formulas);
 extern int SaveExcelDst(char* filename);
+extern int CloseAllExcels(void);
 
 #ifdef __cplusplus
 }

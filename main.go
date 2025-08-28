@@ -259,4 +259,38 @@ func SaveExcelDst(filename *C.char) C.int {
 	return 0
 }
 
+//export CloseAllExcels
+func CloseAllExcels() C.int {
+	mu.Lock()
+	defer mu.Unlock()
+
+	var err error
+
+	if f != nil {
+		if e := f.Close(); e != nil && err == nil {
+			err = e
+		}
+		f = nil
+	}
+
+	if fSrc != nil {
+		if e := fSrc.Close(); e != nil && err == nil {
+			err = e
+		}
+		fSrc = nil
+	}
+
+	if fDst != nil {
+		if e := fDst.Close(); e != nil && err == nil {
+			err = e
+		}
+		fDst = nil
+	}
+
+	if err != nil {
+		return -1
+	}
+	return 0
+}
+
 func main() {}
