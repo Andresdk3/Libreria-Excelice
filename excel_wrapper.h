@@ -88,15 +88,15 @@ typedef struct { void *data; GoInt len; GoInt cap; } GoSlice;
 extern "C" {
 #endif
 
-extern __declspec(dllexport) int OpenExcel(char* filename);
-extern __declspec(dllexport) int WriteCell(char* sheet, char* cell, char* value);
-extern __declspec(dllexport) int CopyRange(char* srcSheet, char* dstSheet, int startRow, int endRow, int startCol, int endCol);
-extern __declspec(dllexport) int SaveExcel(char* filename);
-extern __declspec(dllexport) int OpenExcelSrc(char* filename);
-extern __declspec(dllexport) int OpenExcelDst(char* filename);
-extern __declspec(dllexport) int CopyRangeBetweenBooks(char* srcSheet, char* dstSheet, int startRow, int endRow, int startCol, int endCol, int dstStartRow, int dstStartCol, _Bool formulas);
-extern __declspec(dllexport) int CopySheetBetweenBooks(char* srcSheet, char* dstSheet, _Bool formulas);
-extern __declspec(dllexport) int SaveExcelDst(char* filename);
+extern int OpenExcel(char* filename);
+extern int WriteCell(char* sheet, char* cell, char* value);
+extern int CopyRange(char* srcSheet, char* dstSheet, int startRow, int endRow, int startCol, int endCol);
+extern int SaveExcel(char* filename);
+extern int OpenExcelSrc(char* filename);
+extern int OpenExcelDst(char* filename);
+extern int CopyRangeBetweenBooks(char* srcSheet, char* dstSheet, int startRow, int endRow, int startCol, int endCol, int dstStartRow, int dstStartCol, _Bool formulas);
+extern int CopySheetBetweenBooks(char* srcSheet, char* dstSheet, _Bool formulas);
+extern int SaveExcelDst(char* filename);
 
 #ifdef __cplusplus
 }

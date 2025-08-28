@@ -159,6 +159,7 @@ func CopyRangeBetweenBooks(srcSheet, dstSheet *C.char,
 
 	for i := int(startRow); i <= int(endRow); i++ {
 		for j := int(startCol); j <= int(endCol); j++ {
+			// Celda origen
 			cell, _ := excelize.CoordinatesToCellName(j, i)
 
 			styleID, _ := fSrc.GetCellStyle(src, cell)
@@ -169,6 +170,7 @@ func CopyRangeBetweenBooks(srcSheet, dstSheet *C.char,
 			dstCol := int(dstStartCol) + (j - int(startCol))
 			dstCell, _ := excelize.CoordinatesToCellName(dstCol, dstRow)
 
+			// Copiar fórmula o valor
 			if formulas && formula != "" {
 				fDst.SetCellFormula(dst, dstCell, formula)
 			} else {
@@ -176,13 +178,20 @@ func CopyRangeBetweenBooks(srcSheet, dstSheet *C.char,
 				fDst.SetCellValue(dst, dstCell, val)
 			}
 
+			// Copiar estilo si existe
 			if styleID != 0 {
-				fDst.SetCellStyle(dst, dstCell, dstCell, styleID)
+				style, err := fSrc.GetStyle(styleID)
+				if err == nil && style != nil {
+					newStyleID, _ := fDst.NewStyle(style)
+					fDst.SetCellStyle(dst, dstCell, dstCell, newStyleID)
+				}
 			}
 		}
 	}
+
 	return 0
 }
+
 
 //export CopySheetBetweenBooks
 func CopySheetBetweenBooks(srcSheet, dstSheet *C.char, formulas C.bool) C.int {
@@ -210,9 +219,11 @@ func CopySheetBetweenBooks(srcSheet, dstSheet *C.char, formulas C.bool) C.int {
 		for j := range row {
 			cell, _ := excelize.CoordinatesToCellName(j+1, i+1)
 
+			// Obtener estilo
 			styleID, _ := fSrc.GetCellStyle(src, cell)
 			formula, _ := fSrc.GetCellFormula(src, cell)
 
+			// Copiar valor o fórmula
 			if formulas && formula != "" {
 				fDst.SetCellFormula(dst, cell, formula)
 			} else {
@@ -220,8 +231,13 @@ func CopySheetBetweenBooks(srcSheet, dstSheet *C.char, formulas C.bool) C.int {
 				fDst.SetCellValue(dst, cell, val)
 			}
 
+			// Copiar estilo si existe
 			if styleID != 0 {
-				fDst.SetCellStyle(dst, cell, cell, styleID)
+				style, err := fSrc.GetStyle(styleID)
+				if err == nil && style != nil {
+					newStyleID, _ := fDst.NewStyle(style)
+					fDst.SetCellStyle(dst, cell, cell, newStyleID)
+				}
 			}
 		}
 	}
