@@ -13,208 +13,220 @@ import (
 )
 
 var (
-	f    *excelize.File
-	fSrc *excelize.File
-	fDst *excelize.File
+	Archivo_origen *excelize.File
+	Archivo_segundario *excelize.File
 	mu   sync.Mutex
 )
 
-// ============================================================
-// Funciones con un único libro
-// ============================================================
-
-//export OpenExcel
-func OpenExcel(filename *C.char) C.int {
+//export Abrir_archivo
+func Abrir_archivo(filename *C.char) C.int {
 	mu.Lock()
 	defer mu.Unlock()
 
 	var err error
-	f, err = excelize.OpenFile(C.GoString(filename))
-	if err != nil {
-		return -1
+	if Archivo_origen == nil {
+		Archivo_origen, err = excelize.OpenFile(C.GoString(filename))
+		if err != nil {
+			return -1
+		}
+		return 0
+	}else{
+		Archivo_segundario, err = excelize.OpenFile(C.GoString(filename))
+		if err != nil {
+			return -1
+		}
+		return 0
 	}
-	return 0
 }
 
-//export WriteCell
-func WriteCell(sheet, cell, value *C.char) C.int {
+
+
+//export Escribir_Celda
+func Escribir_Celda(sheet, cell, value *C.char) C.int {
 	mu.Lock()
 	defer mu.Unlock()
 
-	if f == nil {
+	if Archivo_origen == nil {
 		return -1
 	}
 
 	sheetName := C.GoString(sheet)
-	index, err := f.GetSheetIndex(sheetName)
+	index, err := Archivo_origen.GetSheetIndex(sheetName)
 	if index == -1 || err != nil {
-		f.NewSheet(sheetName)
+		Archivo_origen.NewSheet(sheetName)
 	}
 
-	if err := f.SetCellValue(sheetName, C.GoString(cell), C.GoString(value)); err != nil {
+	if err := Archivo_origen.SetCellValue(sheetName, C.GoString(cell), C.GoString(value)); err != nil {
 		return -2
 	}
 	return 0
 }
 
-//export CopyRange
-func CopyRange(srcSheet *C.char, dstSheet *C.char, startRow, endRow, startCol, endCol C.int) C.int {
+//export Guardar_Excel
+func Guardar_Excel(filename *C.char) C.int {
 	mu.Lock()
 	defer mu.Unlock()
 
-	if f == nil {
+	if Archivo_origen == nil {
 		return -1
 	}
-
-	src := C.GoString(srcSheet)
-	dst := C.GoString(dstSheet)
-
-	index, err := f.GetSheetIndex(dst)
-	if index == -1 || err != nil {
-		f.NewSheet(dst)
-	}
-
-	for i := int(startRow); i <= int(endRow); i++ {
-		for j := int(startCol); j <= int(endCol); j++ {
-			cell, _ := excelize.CoordinatesToCellName(j, i)
-			val, _ := f.GetCellValue(src, cell)
-			styleID, _ := f.GetCellStyle(src, cell)
-
-			dstCell, _ := excelize.CoordinatesToCellName(j, i)
-			f.SetCellValue(dst, dstCell, val)
-			if styleID != 0 {
-				f.SetCellStyle(dst, dstCell, dstCell, styleID)
-			}
-		}
-	}
-	return 0
-}
-
-//export SaveExcel
-func SaveExcel(filename *C.char) C.int {
-	mu.Lock()
-	defer mu.Unlock()
-
-	if f == nil {
-		return -1
-	}
-	if err := f.SaveAs(C.GoString(filename)); err != nil {
+	if err := Archivo_origen.SaveAs(C.GoString(filename)); err != nil {
 		return -2
 	}
 	return 0
 }
 
-// ============================================================
-// Funciones con dos libros (origen/destino)
-// ============================================================
-
-//export OpenExcelSrc
-func OpenExcelSrc(filename *C.char) C.int {
-	mu.Lock()
-	defer mu.Unlock()
-
-	var err error
-	fSrc, err = excelize.OpenFile(C.GoString(filename))
-	if err != nil {
-		return -1
-	}
-	return 0
-}
-
-//export OpenExcelDst
-func OpenExcelDst(filename *C.char) C.int {
-	mu.Lock()
-	defer mu.Unlock()
-
-	var err error
-	fDst, err = excelize.OpenFile(C.GoString(filename))
-	if err != nil {
-		fDst = excelize.NewFile()
-	}
-	return 0
-}
 
 // copiar merges compatible con versiones antiguas
-func copyMerges(src, dst *excelize.File, srcSheet, dstSheet string) {
-	merges, err := src.GetMergeCells(srcSheet)
+func copyMerges(srcFile, dstFile *excelize.File, srcSheet, dstSheet string,
+	startRow, startCol, dstStartRow, dstStartCol, endRow, endCol int) {
+
+	merges, err := srcFile.GetMergeCells(srcSheet)
 	if err != nil {
 		return
 	}
+
 	for _, m := range merges {
-		start, end := m.GetStartAxis(), m.GetEndAxis()
-		_ = dst.MergeCell(dstSheet, start, end)
+		// Convertir rango de merge a coordenadas
+		c1, r1, _ := excelize.CellNameToCoordinates(m.GetStartAxis())
+		c2, r2, _ := excelize.CellNameToCoordinates(m.GetEndAxis())
+
+		// Validar si el merge está dentro del rango a copiar
+		if r1 < startRow || r2 > endRow || c1 < startCol || c2 > endCol {
+			continue
+		}
+
+		// Calcular el offset
+		rowOffset := dstStartRow - startRow
+		colOffset := dstStartCol - startCol
+
+		// Aplicar desplazamiento al rango destino
+		newC1 := c1 + colOffset
+		newR1 := r1 + rowOffset
+		newC2 := c2 + colOffset
+		newR2 := r2 + rowOffset
+
+		newStart, _ := excelize.CoordinatesToCellName(newC1, newR1)
+		newEnd, _ := excelize.CoordinatesToCellName(newC2, newR2)
+
+		// Combinar en archivo destino
+		_ = dstFile.MergeCell(dstSheet, newStart, newEnd)
 	}
 }
 
-//export CopyRangeBetweenBooks
-func CopyRangeBetweenBooks(srcSheet, dstSheet *C.char,
+
+//export Copiar_rango
+func Copiar_rango(
+	srcSheet, dstSheet *C.char,
 	startRow, endRow, startCol, endCol,
-	dstStartRow, dstStartCol C.int, formulas C.bool) C.int {
+	dstStartRow, dstStartCol C.int,
+	formulas C.bool,
+	useSecondary C.bool, // true = copiar desde Archivo_segundario a Archivo_origen
+	) C.int {
 
 	mu.Lock()
 	defer mu.Unlock()
 
-	if fSrc == nil || fDst == nil {
-		return -1
+	// Seleccionar libro de origen y destino
+	var srcFile, dstFile *excelize.File
+	if useSecondary {
+		if Archivo_origen == nil || Archivo_segundario == nil {
+			return -1
+		}
+		srcFile = Archivo_segundario
+		dstFile = Archivo_origen
+	} else {
+		if Archivo_origen == nil {
+			return -1
+		}
+		srcFile = Archivo_origen
+		dstFile = Archivo_origen
 	}
 
 	src := C.GoString(srcSheet)
 	dst := C.GoString(dstSheet)
 
-	index, err := fDst.GetSheetIndex(dst)
+	// Crear hoja destino si no existe
+	index, err := dstFile.GetSheetIndex(dst)
 	if index == -1 || err != nil {
-		fDst.NewSheet(dst)
+		dstFile.NewSheet(dst)
 	}
 
 	for i := int(startRow); i <= int(endRow); i++ {
 		for j := int(startCol); j <= int(endCol); j++ {
 			cell, _ := excelize.CoordinatesToCellName(j, i)
-			styleID, _ := fSrc.GetCellStyle(src, cell)
-			formula, _ := fSrc.GetCellFormula(src, cell)
+			styleID, _ := srcFile.GetCellStyle(src, cell)
+			formula, _ := srcFile.GetCellFormula(src, cell)
 
+			// Ajustar destino
 			dstRow := int(dstStartRow) + (i - int(startRow))
 			dstCol := int(dstStartCol) + (j - int(startCol))
 			dstCell, _ := excelize.CoordinatesToCellName(dstCol, dstRow)
 
+			// Fórmulas o valores
 			if formulas && formula != "" {
-				fDst.SetCellFormula(dst, dstCell, formula)
+				dstFile.SetCellFormula(dst, dstCell, formula)
 			} else {
-				val, _ := fSrc.GetCellValue(src, cell)
-				fDst.SetCellValue(dst, dstCell, val)
+				val, _ := srcFile.GetCellValue(src, cell)
+				dstFile.SetCellValue(dst, dstCell, val)
 			}
 
+			// Estilos (recreación)
 			if styleID != 0 {
-				style, err := fSrc.GetStyle(styleID)
+				style, err := srcFile.GetStyle(styleID)
 				if err == nil && style != nil {
-					newStyleID, _ := fDst.NewStyle(style)
-					fDst.SetCellStyle(dst, dstCell, dstCell, newStyleID)
+					newStyleID, _ := dstFile.NewStyle(style)
+					dstFile.SetCellStyle(dst, dstCell, dstCell, newStyleID)
 				}
 			}
 		}
 	}
 
-	copyMerges(fSrc, fDst, src, dst)
+	// Copiar merges
+	copyMerges(srcFile, dstFile, src, dst,
+	int(startRow), int(startCol),
+	int(dstStartRow), int(dstStartCol),
+	int(endRow), int(endCol))
+
 	return 0
 }
 
-//export CopySheetBetweenBooks
-func CopySheetBetweenBooks(srcSheet, dstSheet *C.char, formulas C.bool) C.int {
+
+//export Copiar_hoja
+func Copiar_hoja(
+	srcSheet, dstSheet *C.char,
+	formulas C.bool,
+	useSecondary C.bool, // true = desde Archivo_segundario → Archivo_origen
+) C.int {
 	mu.Lock()
 	defer mu.Unlock()
 
-	if fSrc == nil || fDst == nil {
-		return -1
+	// Seleccionar origen y destino
+	var srcFile, dstFile *excelize.File
+	if useSecondary {
+		if Archivo_origen == nil || Archivo_segundario == nil {
+			return -1
+		}
+		srcFile = Archivo_segundario
+		dstFile = Archivo_origen
+	} else {
+		if Archivo_origen == nil {
+			return -1
+		}
+		srcFile = Archivo_origen
+		dstFile = Archivo_origen
 	}
 
 	src := C.GoString(srcSheet)
 	dst := C.GoString(dstSheet)
 
-	index, err := fDst.GetSheetIndex(dst)
+	// Crear hoja destino si no existe
+	index, err := dstFile.GetSheetIndex(dst)
 	if index == -1 || err != nil {
-		fDst.NewSheet(dst)
+		dstFile.NewSheet(dst)
 	}
 
-	rows, err := fSrc.GetRows(src)
+	rows, err := srcFile.GetRows(src)
 	if err != nil {
 		return -2
 	}
@@ -222,60 +234,54 @@ func CopySheetBetweenBooks(srcSheet, dstSheet *C.char, formulas C.bool) C.int {
 	for i, row := range rows {
 		for j := range row {
 			cell, _ := excelize.CoordinatesToCellName(j+1, i+1)
-			styleID, _ := fSrc.GetCellStyle(src, cell)
-			formula, _ := fSrc.GetCellFormula(src, cell)
+			styleID, _ := srcFile.GetCellStyle(src, cell)
+			formula, _ := srcFile.GetCellFormula(src, cell)
 
+			// Copiar fórmulas o valores
 			if formulas && formula != "" {
-				fDst.SetCellFormula(dst, cell, formula)
+				_ = dstFile.SetCellFormula(dst, cell, formula)
 			} else {
-				val, _ := fSrc.GetCellValue(src, cell)
-				fDst.SetCellValue(dst, cell, val)
+				val, _ := srcFile.GetCellValue(src, cell)
+				_ = dstFile.SetCellValue(dst, cell, val)
 			}
 
+			// Copiar estilos
 			if styleID != 0 {
-				style, err := fSrc.GetStyle(styleID)
+				style, err := srcFile.GetStyle(styleID)
 				if err == nil && style != nil {
-					newStyleID, _ := fDst.NewStyle(style)
-					fDst.SetCellStyle(dst, cell, cell, newStyleID)
+					newStyleID, _ := dstFile.NewStyle(style)
+					_ = dstFile.SetCellStyle(dst, cell, cell, newStyleID)
 				}
 			}
 		}
 	}
 
-	copyMerges(fSrc, fDst, src, dst)
+	// Copiar merges de toda la hoja
+	if len(rows) > 0 {
+		copyMerges(
+			srcFile, dstFile,
+			src, dst,
+			1, 1, 1, 1,
+			len(rows), len(rows[0]),
+		)
+	}
+
 	return 0
 }
 
-//export SaveExcelDst
-func SaveExcelDst(filename *C.char) C.int {
-	mu.Lock()
-	defer mu.Unlock()
-
-	if fDst == nil {
-		return -1
-	}
-	if err := fDst.SaveAs(C.GoString(filename)); err != nil {
-		return -2
-	}
-	return 0
-}
 
 //export CloseAllExcels
 func CloseAllExcels() C.int {
 	mu.Lock()
 	defer mu.Unlock()
 
-	if f != nil {
-		f.Close()
-		f = nil
+	if Archivo_origen != nil {
+		Archivo_origen.Close()
+		Archivo_origen = nil
 	}
-	if fSrc != nil {
-		fSrc.Close()
-		fSrc = nil
-	}
-	if fDst != nil {
-		fDst.Close()
-		fDst = nil
+	if Archivo_segundario != nil {
+		Archivo_segundario.Close()
+		Archivo_segundario = nil
 	}
 	return 0
 }
