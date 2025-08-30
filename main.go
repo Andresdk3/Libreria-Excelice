@@ -122,7 +122,7 @@ func Copiar_rango(
 	dstStartRow, dstStartCol C.int,
 	formulas C.bool,
 	useSecondary C.bool, // true = copiar desde Archivo_segundario a Archivo_origen
-	) C.int {
+) C.int {
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -152,6 +152,7 @@ func Copiar_rango(
 		dstFile.NewSheet(dst)
 	}
 
+	// Copiar celdas (valores, fórmulas y estilos)
 	for i := int(startRow); i <= int(endRow); i++ {
 		for j := int(startCol); j <= int(endCol); j++ {
 			cell, _ := excelize.CoordinatesToCellName(j, i)
@@ -171,7 +172,7 @@ func Copiar_rango(
 				dstFile.SetCellValue(dst, dstCell, val)
 			}
 
-			// Estilos (recreación)
+			// Estilos
 			if styleID != 0 {
 				style, err := srcFile.GetStyle(styleID)
 				if err == nil && style != nil {
@@ -184,12 +185,31 @@ func Copiar_rango(
 
 	// Copiar merges
 	copyMerges(srcFile, dstFile, src, dst,
-	int(startRow), int(startCol),
-	int(dstStartRow), int(dstStartCol),
-	int(endRow), int(endCol))
+		int(startRow), int(startCol),
+		int(dstStartRow), int(dstStartCol),
+		int(endRow), int(endCol))
 
+	// 📏 Copiar anchos de columna
+	for j := int(startCol); j <= int(endCol); j++ {
+		srcCol, _ := excelize.ColumnNumberToName(j)
+		dstCol, _ := excelize.ColumnNumberToName(int(dstStartCol) + (j - int(startCol)))
+		width, err := srcFile.GetColWidth(src, srcCol)
+		if err == nil && width > 0 {
+			_ = dstFile.SetColWidth(dst, dstCol, dstCol, width)
+		}
+	}
+
+	// 📐 Copiar alturas de fila
+	for i := int(startRow); i <= int(endRow); i++ {
+		height, err := srcFile.GetRowHeight(src, i)
+		if err == nil && height > 0 {
+			dstRow := int(dstStartRow) + (i - int(startRow))
+			_ = dstFile.SetRowHeight(dst, dstRow, height)
+		}
+	}
 	return 0
 }
+
 
 
 //export Copiar_hoja
