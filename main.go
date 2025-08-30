@@ -56,11 +56,23 @@ func Escribir_Celda(sheet, cell, value *C.char) C.int {
 		Archivo_origen.NewSheet(sheetName)
 	}
 
-	if err := Archivo_origen.SetCellValue(sheetName, C.GoString(cell), C.GoString(value)); err != nil {
-		return -2
+	valStr := C.GoString(value)
+	cellName := C.GoString(cell)
+
+	// 📌 Si empieza con '=', se asume que es fórmula
+	if len(valStr) > 0 && valStr[0] == '=' {
+		if err := Archivo_origen.SetCellFormula(sheetName, cellName, valStr); err != nil {
+			return -2
+		}
+	} else {
+		if err := Archivo_origen.SetCellValue(sheetName, cellName, valStr); err != nil {
+			return -2
+		}
 	}
+
 	return 0
 }
+
 
 //export Guardar_Excel
 func Guardar_Excel(filename *C.char) C.int {
