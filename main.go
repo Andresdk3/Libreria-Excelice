@@ -226,48 +226,37 @@ func Copiar_hoja(
 		dstFile.NewSheet(dst)
 	}
 
+	// Calcular rango real de la hoja origen
 	rows, err := srcFile.GetRows(src)
 	if err != nil {
 		return -2
 	}
+	if len(rows) == 0 {
+		return 0 // hoja vacía
+	}
 
-	for i, row := range rows {
-		for j := range row {
-			cell, _ := excelize.CoordinatesToCellName(j+1, i+1)
-			styleID, _ := srcFile.GetCellStyle(src, cell)
-			formula, _ := srcFile.GetCellFormula(src, cell)
-
-			// Copiar fórmulas o valores
-			if formulas && formula != "" {
-				_ = dstFile.SetCellFormula(dst, cell, formula)
-			} else {
-				val, _ := srcFile.GetCellValue(src, cell)
-				_ = dstFile.SetCellValue(dst, cell, val)
-			}
-
-			// Copiar estilos
-			if styleID != 0 {
-				style, err := srcFile.GetStyle(styleID)
-				if err == nil && style != nil {
-					newStyleID, _ := dstFile.NewStyle(style)
-					_ = dstFile.SetCellStyle(dst, cell, cell, newStyleID)
-				}
-			}
+	endRow := len(rows)
+	endCol := 0
+	for _, r := range rows {
+		if len(r) > endCol {
+			endCol = len(r)
 		}
 	}
-
-	// Copiar merges de toda la hoja
-	if len(rows) > 0 {
-		copyMerges(
-			srcFile, dstFile,
-			src, dst,
-			1, 1, 1, 1,
-			len(rows), len(rows[0]),
-		)
+	if endCol == 0 {
+		return 0 // sin columnas
 	}
 
-	return 0
+	// Llamar a Copiar_rango para copiar todo el rango usado
+	return Copiar_rango(
+		srcSheet, dstSheet,
+		C.int(1), C.int(endRow),  // startRow, endRow
+		C.int(1), C.int(endCol),  // startCol, endCol
+		C.int(1), C.int(1),       // dstStartRow, dstStartCol
+		formulas,
+		useSecondary,
+	)
 }
+
 
 
 //export CloseAllExcels
