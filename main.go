@@ -10,6 +10,8 @@ import (
 	"sync"
 
 	"github.com/xuri/excelize/v2"
+	"encoding/json"
+	"fmt"
 )
 
 var (
@@ -304,6 +306,32 @@ func Descombinar_Rango(sheet, startCell, endCell *C.char) C.int {
 		return -2
 	}
 	return 0
+}
+
+//export Leer_Hoja
+func Leer_Hoja(sheet *C.char) *C.char {
+    mu.Lock()
+    defer mu.Unlock()
+
+    if Archivo_origen == nil {
+        return C.CString(`{"error": "no hay archivo abierto"}`)
+    }
+
+    sheetName := C.GoString(sheet)
+
+    // Leer todas las filas
+    rows, err := Archivo_origen.GetRows(sheetName)
+    if err != nil {
+        return C.CString(fmt.Sprintf(`{"error": "%v"}`, err))
+    }
+
+    // Convertir a JSON
+    jsonData, err := json.Marshal(rows)
+    if err != nil {
+        return C.CString(fmt.Sprintf(`{"error": "%v"}`, err))
+    }
+
+    return C.CString(string(jsonData))
 }
 
 

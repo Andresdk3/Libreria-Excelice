@@ -94,6 +94,7 @@ extern int Guardar_Excel(char* filename);
 extern int Copiar_rango(char* srcSheet, char* dstSheet, int startRow, int endRow, int startCol, int endCol, int dstStartRow, int dstStartCol, _Bool formulas, _Bool useSecondary);
 extern int Copiar_hoja(char* srcSheet, char* dstSheet, _Bool formulas, _Bool useSecondary);
 extern int Descombinar_Rango(char* sheet, char* startCell, char* endCell);
+extern char* Leer_Hoja(char* sheet);
 extern int CloseAllExcels(void);
 
 #ifdef __cplusplus
