@@ -40,7 +40,6 @@ func Abrir_archivo(filename *C.char) C.int {
 }
 
 
-
 //export Escribir_Celda
 func Escribir_Celda(sheet, cell, value *C.char) C.int {
 	mu.Lock()
@@ -223,7 +222,6 @@ func Copiar_rango(
 }
 
 
-
 //export Copiar_hoja
 func Copiar_hoja(
 	srcSheet, dstSheet *C.char,
@@ -289,6 +287,24 @@ func Copiar_hoja(
 	)
 }
 
+//export Descombinar_Rango
+func Descombinar_Rango(sheet, startCell, endCell *C.char) C.int {
+	mu.Lock()
+	defer mu.Unlock()
+
+	if Archivo_origen == nil {
+		return -1
+	}
+
+	sheetName := C.GoString(sheet)
+	hcell := C.GoString(startCell)
+	vcell := C.GoString(endCell)
+
+	if err := Archivo_origen.UnmergeCell(sheetName, hcell, vcell); err != nil {
+		return -2
+	}
+	return 0
+}
 
 
 //export CloseAllExcels
