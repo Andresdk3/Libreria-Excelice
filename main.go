@@ -114,6 +114,8 @@ func Leer_Hoja(id C.int, sheet *C.char) *C.char {
 	return C.CString(string(jsonData))
 }
 
+
+
 //export Escribir_Celda
 func Escribir_Celda(id C.int, sheet *C.char, cell *C.char, value *C.char) C.int {
 	mu.Lock()
@@ -352,5 +354,26 @@ func Copiar_hoja_completa(srcID, dstID C.int, srcSheet *C.char, dstSheet *C.char
 	}
 	return 0
 }
+
+//export Eliminar_Fila
+func Eliminar_Fila(id C.int, sheetName *C.char, fila C.int) C.int {
+	mu.Lock()
+	defer mu.Unlock()
+
+	file, ok := libros[int(id)]
+	if !ok {
+		return -1
+	}
+
+	sheet := C.GoString(sheetName)
+
+	// Excelize usa índice base 1 para filas
+	err := file.RemoveRow(sheet, int(fila))
+	if err != nil {
+		return -2
+	}
+	return 0
+}
+
 
 func main() {}

@@ -100,6 +100,7 @@ extern char* Listar_Hojas(int id);
 extern int Copiar_rango(int srcID, int dstID, char* srcSheet, char* dstSheet, int startRow, int endRow, int startCol, int endCol, int dstStartRow, int dstStartCol, GoUint8 formulas);
 extern int Copiar_hoja(int srcID, int dstID, char* srcSheet, char* dstSheet, GoUint8 formulas);
 extern int Copiar_hoja_completa(int srcID, int dstID, char* srcSheet, char* dstSheet);
+extern int Eliminar_Fila(int id, char* sheetName, int fila);
 
 #ifdef __cplusplus
 }
