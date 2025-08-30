@@ -89,13 +89,17 @@ extern "C" {
 #endif
 
 extern int Abrir_archivo(char* filename);
-extern int Escribir_Celda(char* sheet, char* cell, char* value);
-extern int Guardar_Excel(char* filename);
-extern int Copiar_rango(char* srcSheet, char* dstSheet, int startRow, int endRow, int startCol, int endCol, int dstStartRow, int dstStartCol, _Bool formulas, _Bool useSecondary);
-extern int Copiar_hoja(char* srcSheet, char* dstSheet, _Bool formulas, _Bool useSecondary);
-extern int Descombinar_Rango(char* sheet, char* startCell, char* endCell);
-extern char* Leer_Hoja(char* sheet);
+extern int Guardar_Excel(int id, char* filename);
+extern int Cerrar_archivo(int id);
 extern int CloseAllExcels(void);
+extern void FreeString(char* str);
+extern char* Leer_Hoja(int id, char* sheet);
+extern int Escribir_Celda(int id, char* sheet, char* cell, char* value);
+extern int Descombinar_Rango(int id, char* sheet, char* start, char* end);
+extern char* Listar_Hojas(int id);
+extern int Copiar_rango(int srcID, int dstID, char* srcSheet, char* dstSheet, int startRow, int endRow, int startCol, int endCol, int dstStartRow, int dstStartCol, GoUint8 formulas);
+extern int Copiar_hoja(int srcID, int dstID, char* srcSheet, char* dstSheet, GoUint8 formulas);
+extern int Copiar_hoja_completa(int srcID, int dstID, char* srcSheet, char* dstSheet);
 
 #ifdef __cplusplus
 }

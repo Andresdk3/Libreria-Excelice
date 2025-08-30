@@ -7,88 +7,166 @@ package main
 import "C"
 
 import (
-	"sync"
-
-	"github.com/xuri/excelize/v2"
 	"encoding/json"
 	"fmt"
+	"sync"
+	"unsafe"
+
+	"github.com/xuri/excelize/v2"
 )
 
 var (
-	Archivo_origen *excelize.File
-	Archivo_segundario *excelize.File
-	mu   sync.Mutex
+	mu     sync.Mutex
+	libros = make(map[int]*excelize.File) // id → *excelize.File
+	nextID = 1
 )
+
+// =====================
+// Gestión de archivos
+// =====================
 
 //export Abrir_archivo
 func Abrir_archivo(filename *C.char) C.int {
 	mu.Lock()
-	defer mu.Unlock()
-
-	var err error
-	if Archivo_origen == nil {
-		Archivo_origen, err = excelize.OpenFile(C.GoString(filename))
-		if err != nil {
-			return -1
-		}
-		return 0
-	}else{
-		Archivo_segundario, err = excelize.OpenFile(C.GoString(filename))
-		if err != nil {
-			return -1
-		}
-		return 0
-	}
-}
-
-
-//export Escribir_Celda
-func Escribir_Celda(sheet, cell, value *C.char) C.int {
-	mu.Lock()
-	defer mu.Unlock()
-
-	if Archivo_origen == nil {
+	f, err := excelize.OpenFile(C.GoString(filename))
+	if err != nil {
+		mu.Unlock()
 		return -1
 	}
-
-	sheetName := C.GoString(sheet)
-	index, err := Archivo_origen.GetSheetIndex(sheetName)
-	if index == -1 || err != nil {
-		Archivo_origen.NewSheet(sheetName)
-	}
-
-	valStr := C.GoString(value)
-	cellName := C.GoString(cell)
-
-	// 📌 Si empieza con '=', se asume que es fórmula
-	if len(valStr) > 0 && valStr[0] == '=' {
-		if err := Archivo_origen.SetCellFormula(sheetName, cellName, valStr); err != nil {
-			return -2
-		}
-	} else {
-		if err := Archivo_origen.SetCellValue(sheetName, cellName, valStr); err != nil {
-			return -2
-		}
-	}
-
-	return 0
+	id := nextID
+	libros[id] = f
+	nextID++
+	mu.Unlock()
+	return C.int(id)
 }
-
 
 //export Guardar_Excel
-func Guardar_Excel(filename *C.char) C.int {
+func Guardar_Excel(id C.int, filename *C.char) C.int {
 	mu.Lock()
-	defer mu.Unlock()
-
-	if Archivo_origen == nil {
+	file, ok := libros[int(id)]
+	mu.Unlock()
+	if !ok {
 		return -1
 	}
-	if err := Archivo_origen.SaveAs(C.GoString(filename)); err != nil {
+	if err := file.SaveAs(C.GoString(filename)); err != nil {
 		return -2
 	}
 	return 0
 }
 
+//export Cerrar_archivo
+func Cerrar_archivo(id C.int) C.int {
+	mu.Lock()
+	file, ok := libros[int(id)]
+	if ok {
+		delete(libros, int(id))
+	}
+	mu.Unlock()
+	if !ok {
+		return -1
+	}
+	file.Close()
+	return 0
+}
+
+//export CloseAllExcels
+func CloseAllExcels() C.int {
+	mu.Lock()
+	for id, file := range libros {
+		file.Close()
+		delete(libros, id)
+	}
+	mu.Unlock()
+	return 0
+}
+
+// =====================
+// Manejo de memoria C
+// =====================
+
+//export FreeString
+func FreeString(str *C.char) {
+	C.free(unsafe.Pointer(str))
+}
+
+// =====================
+// Operaciones con hojas
+// =====================
+
+//export Leer_Hoja
+func Leer_Hoja(id C.int, sheet *C.char) *C.char {
+	mu.Lock()
+	file, ok := libros[int(id)]
+	mu.Unlock()
+	if !ok {
+		return C.CString(`{"error": "archivo no encontrado"}`)
+	}
+
+	rows, err := file.GetRows(C.GoString(sheet))
+	if err != nil {
+		return C.CString(fmt.Sprintf(`{"error": "%v"}`, err))
+	}
+
+	jsonData, err := json.Marshal(rows)
+	if err != nil {
+		return C.CString(fmt.Sprintf(`{"error": "%v"}`, err))
+	}
+	return C.CString(string(jsonData))
+}
+
+//export Escribir_Celda
+func Escribir_Celda(id C.int, sheet *C.char, cell *C.char, value *C.char) C.int {
+	mu.Lock()
+	file, ok := libros[int(id)]
+	mu.Unlock()
+	if !ok {
+		return -1
+	}
+
+	valStr := C.GoString(value)
+	
+	if len(valStr) > 0 && valStr[0] == '=' {
+		if err := file.SetCellFormula(C.GoString(sheet), C.GoString(cell), C.GoString(value)); err != nil {
+			return -2
+		}
+	} else {
+		if err := file.SetCellValue(C.GoString(sheet), C.GoString(cell), C.GoString(value)); err != nil {
+			return -2
+		}
+	}
+	return 0
+}
+
+//export Descombinar_Rango
+func Descombinar_Rango(id C.int, sheet *C.char, start *C.char, end *C.char) C.int {
+	mu.Lock()
+	file, ok := libros[int(id)]
+	mu.Unlock()
+	if !ok {
+		return -1
+	}
+	if err := file.UnmergeCell(C.GoString(sheet), C.GoString(start), C.GoString(end)); err != nil {
+		return -2
+	}
+	return 0
+}
+
+//export Listar_Hojas
+func Listar_Hojas(id C.int) *C.char {
+	mu.Lock()
+	file, ok := libros[int(id)]
+	mu.Unlock()
+	if !ok {
+		return C.CString(`{"error":"archivo no encontrado"}`)
+	}
+	sheets := file.GetSheetList()
+	data, _ := json.Marshal(sheets)
+	return C.CString(string(data))
+}
+
+// =====================
+// Copiar datos
+// =====================
 
 // copiar merges compatible con versiones antiguas
 func copyMerges(srcFile, dstFile *excelize.File, srcSheet, dstSheet string,
@@ -127,38 +205,28 @@ func copyMerges(srcFile, dstFile *excelize.File, srcSheet, dstSheet string,
 	}
 }
 
-
 //export Copiar_rango
 func Copiar_rango(
-	srcSheet, dstSheet *C.char,
-	startRow, endRow, startCol, endCol,
-	dstStartRow, dstStartCol C.int,
-	formulas C.bool,
-	useSecondary C.bool, // true = copiar desde Archivo_segundario a Archivo_origen
-) C.int {
+		srcID C.int, dstID C.int,
+		srcSheet *C.char, dstSheet *C.char,
+		startRow, endRow, startCol, endCol C.int,
+		dstStartRow, dstStartCol C.int,
+		formulas bool,
+	) C.int {
 
 	mu.Lock()
-	defer mu.Unlock()
-
-	// Seleccionar libro de origen y destino
-	var srcFile, dstFile *excelize.File
-	if useSecondary {
-		if Archivo_origen == nil || Archivo_segundario == nil {
-			return -1
-		}
-		srcFile = Archivo_segundario
-		dstFile = Archivo_origen
-	} else {
-		if Archivo_origen == nil {
-			return -1
-		}
-		srcFile = Archivo_origen
-		dstFile = Archivo_origen
+	srcFile, ok1 := libros[int(srcID)]
+	dstFile, ok2 := libros[int(dstID)]
+	mu.Unlock()
+	if !ok1 {
+		return -1
+	}
+	if !ok2 {
+		return -2
 	}
 
 	src := C.GoString(srcSheet)
 	dst := C.GoString(dstSheet)
-
 	// Crear hoja destino si no existe
 	index, err := dstFile.GetSheetIndex(dst)
 	if index == -1 || err != nil {
@@ -223,130 +291,64 @@ func Copiar_rango(
 	return 0
 }
 
-
 //export Copiar_hoja
-func Copiar_hoja(
-	srcSheet, dstSheet *C.char,
-	formulas C.bool,
-	useSecondary C.bool, // true = desde Archivo_segundario → Archivo_origen
-) C.int {
+func Copiar_hoja(srcID C.int, dstID C.int, srcSheet *C.char, dstSheet *C.char, formulas bool) C.int {
 	mu.Lock()
-	defer mu.Unlock()
-
-	// Seleccionar origen y destino
-	var srcFile, dstFile *excelize.File
-	if useSecondary {
-		if Archivo_origen == nil || Archivo_segundario == nil {
-			return -1
-		}
-		srcFile = Archivo_segundario
-		dstFile = Archivo_origen
-	} else {
-		if Archivo_origen == nil {
-			return -1
-		}
-		srcFile = Archivo_origen
-		dstFile = Archivo_origen
-	}
-
-	src := C.GoString(srcSheet)
-	dst := C.GoString(dstSheet)
-
-	// Crear hoja destino si no existe
-	index, err := dstFile.GetSheetIndex(dst)
-	if index == -1 || err != nil {
-		dstFile.NewSheet(dst)
-	}
-
-	// Calcular rango real de la hoja origen
-	rows, err := srcFile.GetRows(src)
-	if err != nil {
-		return -2
-	}
-	if len(rows) == 0 {
-		return 0 // hoja vacía
-	}
-
-	endRow := len(rows)
-	endCol := 0
-	for _, r := range rows {
-		if len(r) > endCol {
-			endCol = len(r)
-		}
-	}
-	if endCol == 0 {
-		return 0 // sin columnas
-	}
-
-	// Llamar a Copiar_rango para copiar todo el rango usado
-	return Copiar_rango(
-		srcSheet, dstSheet,
-		C.int(1), C.int(endRow),  // startRow, endRow
-		C.int(1), C.int(endCol),  // startCol, endCol
-		C.int(1), C.int(1),       // dstStartRow, dstStartCol
-		formulas,
-		useSecondary,
-	)
-}
-
-//export Descombinar_Rango
-func Descombinar_Rango(sheet, startCell, endCell *C.char) C.int {
-	mu.Lock()
-	defer mu.Unlock()
-
-	if Archivo_origen == nil {
+	srcFile, ok1 := libros[int(srcID)]
+	dstFile, ok2 := libros[int(dstID)]
+	mu.Unlock()
+	if !ok1 {
 		return -1
 	}
-
-	sheetName := C.GoString(sheet)
-	hcell := C.GoString(startCell)
-	vcell := C.GoString(endCell)
-
-	if err := Archivo_origen.UnmergeCell(sheetName, hcell, vcell); err != nil {
+	if !ok2 {
 		return -2
+	}
+
+	dstFile.NewSheet(C.GoString(dstSheet))
+
+	rows, err := srcFile.GetRows(C.GoString(srcSheet))
+	if err != nil {
+		return -3
+	}
+
+	for r, row := range rows {
+		for c, val := range row {
+			cell, _ := excelize.CoordinatesToCellName(c+1, r+1)
+			if formulas {
+				formula, _ := srcFile.GetCellFormula(C.GoString(srcSheet), cell)
+				if formula != "" {
+					dstFile.SetCellFormula(C.GoString(dstSheet), cell, formula)
+				} else {
+					dstFile.SetCellValue(C.GoString(dstSheet), cell, val)
+				}
+			} else {
+				dstFile.SetCellValue(C.GoString(dstSheet), cell, val)
+			}
+		}
 	}
 	return 0
 }
 
-//export Leer_Hoja
-func Leer_Hoja(sheet *C.char) *C.char {
-    mu.Lock()
-    defer mu.Unlock()
-
-    if Archivo_origen == nil {
-        return C.CString(`{"error": "no hay archivo abierto"}`)
-    }
-
-    sheetName := C.GoString(sheet)
-
-    // Leer todas las filas
-    rows, err := Archivo_origen.GetRows(sheetName)
-    if err != nil {
-        return C.CString(fmt.Sprintf(`{"error": "%v"}`, err))
-    }
-
-    // Convertir a JSON
-    jsonData, err := json.Marshal(rows)
-    if err != nil {
-        return C.CString(fmt.Sprintf(`{"error": "%v"}`, err))
-    }
-
-    return C.CString(string(jsonData))
-}
-
-
-//export CloseAllExcels
-func CloseAllExcels() C.int {
+//export Copiar_hoja_completa
+func Copiar_hoja_completa(srcID, dstID C.int, srcSheet *C.char, dstSheet *C.char) C.int {
 	mu.Lock()
-	defer mu.Unlock()
-
-	if Archivo_origen != nil {
-		Archivo_origen.Close()
-		Archivo_origen = nil
+	srcFile, ok1 := libros[int(srcID)]
+	dstFile, ok2 := libros[int(dstID)]
+	mu.Unlock()
+	if !ok1 {
+		return -1
 	}
-	if Archivo_segundario != nil {
-		Archivo_segundario.Close()
-		Archivo_segundario = nil
+	if !ok2 {
+		return -2
+	}
+
+	srcIdx, err := srcFile.GetSheetIndex(C.GoString(srcSheet))
+	if err != nil {
+		return -3
+	}
+	dstIdx, _ := dstFile.NewSheet(C.GoString(dstSheet))
+	if err := dstFile.CopySheet(srcIdx, dstIdx); err != nil {
+		return -4
 	}
 	return 0
 }
