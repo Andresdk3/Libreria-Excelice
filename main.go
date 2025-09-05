@@ -9,6 +9,7 @@ import "C"
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"sync"
 	"unsafe"
 
@@ -126,18 +127,39 @@ func Escribir_Celda(id C.int, sheet *C.char, cell *C.char, value *C.char) C.int 
 	}
 
 	valStr := C.GoString(value)
-	
+
+	// Si comienza con "=" → escribir como fórmula
 	if len(valStr) > 0 && valStr[0] == '=' {
-		if err := file.SetCellFormula(C.GoString(sheet), C.GoString(cell), C.GoString(value)); err != nil {
-			return -2
+		if err := file.SetCellFormula(C.GoString(sheet), C.GoString(cell), valStr); err != nil {
+			return -4
 		}
-	} else {
-		if err := file.SetCellValue(C.GoString(sheet), C.GoString(cell), C.GoString(value)); err != nil {
-			return -2
-		}
+		return 0
 	}
+
+	// Intentar parsear como número entero
+	if i, err := strconv.Atoi(valStr); err == nil {
+		if err := file.SetCellValue(C.GoString(sheet), C.GoString(cell), i); err != nil {
+			return -3
+		}
+		return 0
+	}
+
+	// Intentar parsear como número decimal
+	if f, err := strconv.ParseFloat(valStr, 64); err == nil {
+		if err := file.SetCellValue(C.GoString(sheet), C.GoString(cell), f); err != nil {
+			return -2
+		}
+		return 0
+	}
+
+	// Si no es número → escribir como texto
+	if err := file.SetCellValue(C.GoString(sheet), C.GoString(cell), valStr); err != nil {
+		return -1
+	}
+
 	return 0
 }
+
 
 //export Descombinar_Rango
 func Descombinar_Rango(id C.int, sheet *C.char, start *C.char, end *C.char) C.int {
@@ -252,7 +274,15 @@ func Copiar_rango(
 				dstFile.SetCellFormula(dst, dstCell, formula)
 			} else {
 				val, _ := srcFile.GetCellValue(src, cell)
-				dstFile.SetCellValue(dst, dstCell, val)
+				// Intentar convertir a número
+				if f, err := strconv.ParseFloat(val, 64); err == nil {
+					dstFile.SetCellValue(dst, dstCell, f)
+				} else if i, err := strconv.ParseInt(val, 10, 64); err == nil {
+					dstFile.SetCellValue(dst, dstCell, i)
+				} else {
+					// Si no es número, escribir como string
+					dstFile.SetCellValue(dst, dstCell, val)
+				}
 			}
 
 			// Estilos
