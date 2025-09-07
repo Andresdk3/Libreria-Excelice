@@ -11,21 +11,69 @@ import (
 	"fmt"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"unsafe"
 
 	"github.com/xuri/excelize/v2"
 )
 
 var (
-	mu     sync.RWMutex // Cambiado a RWMutex para lecturas concurrentes
-	libros = make(map[int]*excelize.File)
-	nextID = 1
-	idPool = sync.Pool{ // Pool para reutilizar IDs
-		New: func() interface{} {
-			return new(int)
-		},
-	}
+	// Mapa concurrente para libros
+	libros = &sync.Map{}
+	// Contador atómico para IDs
+	nextID int64 = 1
+	// Pool de workers para procesamiento concurrente
+	workerPool = NewWorkerPool(8) // 8 workers por defecto
 )
+
+// WorkerPool gestiona un pool de goroutines para procesamiento concurrente
+type WorkerPool struct {
+	workers   int
+	taskQueue chan func()
+	wg        sync.WaitGroup
+}
+
+// NewWorkerPool crea un nuevo pool de workers
+func NewWorkerPool(workers int) *WorkerPool {
+	pool := &WorkerPool{
+		workers:   workers,
+		taskQueue: make(chan func(), workers*2),
+	}
+
+	// Iniciar workers
+	for i := 0; i < workers; i++ {
+		pool.wg.Add(1)
+		go pool.worker()
+	}
+
+	return pool
+}
+
+// worker procesa tareas del queue
+func (p *WorkerPool) worker() {
+	defer p.wg.Done()
+	for task := range p.taskQueue {
+		task()
+	}
+}
+
+// Submit añade una tarea al pool
+func (p *WorkerPool) Submit(task func()) {
+	p.taskQueue <- task
+}
+
+// Close cierra el pool
+func (p *WorkerPool) Close() {
+	close(p.taskQueue)
+	p.wg.Wait()
+}
+
+// SetWorkerPoolSize permite ajustar el tamaño del pool dinámicamente
+//export SetWorkerPoolSize
+func SetWorkerPoolSize(size C.int) {
+	workerPool.Close()
+	workerPool = NewWorkerPool(int(size))
+}
 
 // =====================
 // Gestión de archivos
@@ -33,29 +81,24 @@ var (
 
 //export Abrir_archivo
 func Abrir_archivo(filename *C.char) C.int {
-	mu.Lock()
 	f, err := excelize.OpenFile(C.GoString(filename))
 	if err != nil {
-		mu.Unlock()
 		return -1
 	}
-	id := nextID
-	libros[id] = f
-	nextID++
-	mu.Unlock()
+	
+	id := atomic.AddInt64(&nextID, 1)
+	libros.Store(id, f)
 	return C.int(id)
 }
 
 //export Guardar_Excel
 func Guardar_Excel(id C.int, filename *C.char) C.int {
-	mu.RLock()
-	file, ok := libros[int(id)]
-	mu.RUnlock()
-
+	file, ok := libros.Load(int64(id))
 	if !ok {
 		return -1
 	}
-	if err := file.SaveAs(C.GoString(filename)); err != nil {
+	
+	if err := file.(*excelize.File).SaveAs(C.GoString(filename)); err != nil {
 		return -2
 	}
 	return 0
@@ -63,29 +106,22 @@ func Guardar_Excel(id C.int, filename *C.char) C.int {
 
 //export Cerrar_archivo
 func Cerrar_archivo(id C.int) C.int {
-	mu.Lock()
-	file, ok := libros[int(id)]
-	if ok {
-		delete(libros, int(id))
-	}
-	mu.Unlock()
-
+	file, ok := libros.LoadAndDelete(int64(id))
 	if !ok {
 		return -1
 	}
-	file.Close()
+	
+	file.(*excelize.File).Close()
 	return 0
 }
 
 //export CloseAllExcels
 func CloseAllExcels() C.int {
-	mu.Lock()
-	defer mu.Unlock()
-
-	for id, file := range libros {
-		file.Close()
-		delete(libros, id)
-	}
+	libros.Range(func(key, value interface{}) bool {
+		value.(*excelize.File).Close()
+		libros.Delete(key)
+		return true
+	})
 	return 0
 }
 
@@ -104,15 +140,12 @@ func FreeString(str *C.char) {
 
 //export Leer_Hoja
 func Leer_Hoja(id C.int, sheet *C.char) *C.char {
-	mu.RLock()
-	file, ok := libros[int(id)]
-	mu.RUnlock()
-
+	file, ok := libros.Load(int64(id))
 	if !ok {
 		return C.CString(`{"error": "archivo no encontrado"}`)
 	}
 
-	rows, err := file.GetRows(C.GoString(sheet))
+	rows, err := file.(*excelize.File).GetRows(C.GoString(sheet))
 	if err != nil {
 		return C.CString(fmt.Sprintf(`{"error": "%v"}`, err))
 	}
@@ -126,21 +159,19 @@ func Leer_Hoja(id C.int, sheet *C.char) *C.char {
 
 //export Escribir_Celda
 func Escribir_Celda(id C.int, sheet *C.char, cell *C.char, value *C.char) C.int {
-	mu.RLock()
-	file, ok := libros[int(id)]
-	mu.RUnlock()
-
+	file, ok := libros.Load(int64(id))
 	if !ok {
 		return -1
 	}
 
+	f := file.(*excelize.File)
 	valStr := C.GoString(value)
 	sheetStr := C.GoString(sheet)
 	cellStr := C.GoString(cell)
 
 	// Si comienza con "=" → escribir como fórmula
 	if len(valStr) > 0 && valStr[0] == '=' {
-		if err := file.SetCellFormula(sheetStr, cellStr, valStr); err != nil {
+		if err := f.SetCellFormula(sheetStr, cellStr, valStr); err != nil {
 			return -4
 		}
 		return 0
@@ -148,22 +179,22 @@ func Escribir_Celda(id C.int, sheet *C.char, cell *C.char, value *C.char) C.int 
 
 	// Intentar parsear como número
 	if i, err := strconv.ParseInt(valStr, 10, 64); err == nil {
-		if err := file.SetCellValue(sheetStr, cellStr, i); err != nil {
+		if err := f.SetCellValue(sheetStr, cellStr, i); err != nil {
 			return -3
 		}
 		return 0
 	}
 
 	// Intentar parsear como número decimal
-	if f, err := strconv.ParseFloat(valStr, 64); err == nil {
-		if err := file.SetCellValue(sheetStr, cellStr, f); err != nil {
+	if fVal, err := strconv.ParseFloat(valStr, 64); err == nil {
+		if err := f.SetCellValue(sheetStr, cellStr, fVal); err != nil {
 			return -2
 		}
 		return 0
 	}
 
 	// Si no es número → escribir como texto
-	if err := file.SetCellValue(sheetStr, cellStr, valStr); err != nil {
+	if err := f.SetCellValue(sheetStr, cellStr, valStr); err != nil {
 		return -1
 	}
 
@@ -172,15 +203,12 @@ func Escribir_Celda(id C.int, sheet *C.char, cell *C.char, value *C.char) C.int 
 
 //export Descombinar_Rango
 func Descombinar_Rango(id C.int, sheet *C.char, start *C.char, end *C.char) C.int {
-	mu.RLock()
-	file, ok := libros[int(id)]
-	mu.RUnlock()
-
+	file, ok := libros.Load(int64(id))
 	if !ok {
 		return -1
 	}
 
-	if err := file.UnmergeCell(C.GoString(sheet), C.GoString(start), C.GoString(end)); err != nil {
+	if err := file.(*excelize.File).UnmergeCell(C.GoString(sheet), C.GoString(start), C.GoString(end)); err != nil {
 		return -2
 	}
 	return 0
@@ -188,21 +216,18 @@ func Descombinar_Rango(id C.int, sheet *C.char, start *C.char, end *C.char) C.in
 
 //export Listar_Hojas
 func Listar_Hojas(id C.int) *C.char {
-	mu.RLock()
-	file, ok := libros[int(id)]
-	mu.RUnlock()
-
+	file, ok := libros.Load(int64(id))
 	if !ok {
 		return C.CString(`{"error":"archivo no encontrado"}`)
 	}
 
-	sheets := file.GetSheetList()
+	sheets := file.(*excelize.File).GetSheetList()
 	data, _ := json.Marshal(sheets)
 	return C.CString(string(data))
 }
 
 // =====================
-// Copiar datos (optimizado)
+// Copiar datos (optimizado con pool de workers)
 // =====================
 
 // copiarMerges optimizado
@@ -242,11 +267,8 @@ func Copiar_rango(
 	formulas bool,
 ) C.int {
 
-	mu.RLock()
-	srcFile, ok1 := libros[int(srcID)]
-	dstFile, ok2 := libros[int(dstID)]
-	mu.RUnlock()
-
+	srcFile, ok1 := libros.Load(int64(srcID))
+	dstFile, ok2 := libros.Load(int64(dstID))
 	if !ok1 || !ok2 {
 		return -1
 	}
@@ -255,92 +277,116 @@ func Copiar_rango(
 	dst := C.GoString(dstSheet)
 
 	// Verificar y crear hoja destino si no existe
-	index, err := dstFile.GetSheetIndex(dst)
+	index, err := dstFile.(*excelize.File).GetSheetIndex(dst)
 	if index == -1 || err != nil {
-		dstFile.NewSheet(dst)
+		dstFile.(*excelize.File).NewSheet(dst)
 	}
 
 	// Precalcular offsets
 	rowOffset := int(dstStartRow) - int(startRow)
 	colOffset := int(dstStartCol) - int(startCol)
 
-	// Buffer para nombres de celdas
-	cellCache := make(map[[2]int]string)
+	// Usar waitgroup para procesamiento con pool
+	var wg sync.WaitGroup
+	errorChan := make(chan error, 1)
+	var hasError atomic.Bool
 
-	// Copiar celdas
+	// Copiar celdas usando el pool de workers
 	for i := int(startRow); i <= int(endRow); i++ {
-		for j := int(startCol); j <= int(endCol); j++ {
-			// Usar cache para nombres de celdas
-			srcKey := [2]int{j, i}
-			if _, exists := cellCache[srcKey]; !exists {
-				cellCache[srcKey], _ = excelize.CoordinatesToCellName(j, i)
+		wg.Add(1)
+		row := i // Capturar variable para la goroutine
+		
+		workerPool.Submit(func() {
+			defer wg.Done()
+			
+			if hasError.Load() {
+				return // Si hay error, salir
 			}
-			srcCell := cellCache[srcKey]
+			
+			for j := int(startCol); j <= int(endCol); j++ {
+				if hasError.Load() {
+					return // Si hay error, salir
+				}
+				
+				srcCell, _ := excelize.CoordinatesToCellName(j, row)
+				dstRow := row + rowOffset
+				dstCol := j + colOffset
+				dstCell, _ := excelize.CoordinatesToCellName(dstCol, dstRow)
 
-			dstRow := i + rowOffset
-			dstCol := j + colOffset
-			dstKey := [2]int{dstCol, dstRow}
-			if _, exists := cellCache[dstKey]; !exists {
-				cellCache[dstKey], _ = excelize.CoordinatesToCellName(dstCol, dstRow)
-			}
-			dstCell := cellCache[dstKey]
+				// Obtener estilo y fórmula
+				styleID, _ := srcFile.(*excelize.File).GetCellStyle(src, srcCell)
+				formula, _ := srcFile.(*excelize.File).GetCellFormula(src, srcCell)
 
-			// Obtener estilo y fórmula
-			styleID, _ := srcFile.GetCellStyle(src, srcCell)
-			formula, _ := srcFile.GetCellFormula(src, srcCell)
-
-			// Copiar fórmula o valor
-			if formulas && formula != "" {
-				dstFile.SetCellFormula(dst, dstCell, formula)
-			} else {
-				val, _ := srcFile.GetCellValue(src, srcCell)
-				// Determinar tipo de dato eficientemente
-				switch {
-				case val == "":
-					dstFile.SetCellValue(dst, dstCell, "")
-				case isInteger(val):
-					if i, err := strconv.ParseInt(val, 10, 64); err == nil {
-						dstFile.SetCellValue(dst, dstCell, i)
+				// Copiar fórmula o valor
+				if formulas && formula != "" {
+					if err := dstFile.(*excelize.File).SetCellFormula(dst, dstCell, formula); err != nil {
+						if !hasError.Swap(true) {
+							errorChan <- err
+						}
+						return
 					}
-				case isFloat(val):
-					if f, err := strconv.ParseFloat(val, 64); err == nil {
-						dstFile.SetCellValue(dst, dstCell, f)
+				} else {
+					val, _ := srcFile.(*excelize.File).GetCellValue(src, srcCell)
+					// Determinar tipo de dato eficientemente
+					switch {
+					case val == "":
+						dstFile.(*excelize.File).SetCellValue(dst, dstCell, "")
+					case isInteger(val):
+						if iVal, err := strconv.ParseInt(val, 10, 64); err == nil {
+							dstFile.(*excelize.File).SetCellValue(dst, dstCell, iVal)
+						} else {
+							dstFile.(*excelize.File).SetCellValue(dst, dstCell, val)
+						}
+					case isFloat(val):
+						if fVal, err := strconv.ParseFloat(val, 64); err == nil {
+							dstFile.(*excelize.File).SetCellValue(dst, dstCell, fVal)
+						} else {
+							dstFile.(*excelize.File).SetCellValue(dst, dstCell, val)
+						}
+					default:
+						dstFile.(*excelize.File).SetCellValue(dst, dstCell, val)
 					}
-				default:
-					dstFile.SetCellValue(dst, dstCell, val)
+				}
+
+				// Copiar estilo si existe
+				if styleID != 0 {
+					style, err := srcFile.(*excelize.File).GetStyle(styleID)
+					if err == nil && style != nil {
+						newStyleID, _ := dstFile.(*excelize.File).NewStyle(style)
+						dstFile.(*excelize.File).SetCellStyle(dst, dstCell, dstCell, newStyleID)
+					}
 				}
 			}
-
-			// Copiar estilo si existe
-			if styleID != 0 {
-				style, err := srcFile.GetStyle(styleID)
-				if err == nil && style != nil {
-					newStyleID, _ := dstFile.NewStyle(style)
-					dstFile.SetCellStyle(dst, dstCell, dstCell, newStyleID)
-				}
-			}
-		}
+		})
 	}
 
-	// Copiar merges
-	copiarMerges(srcFile, dstFile, src, dst,
+	wg.Wait()
+	close(errorChan)
+	
+	// Verificar si hubo errores
+	if hasError.Load() {
+		return -2
+	}
+
+	// Copiar merges (no necesita concurrencia)
+	copiarMerges(srcFile.(*excelize.File), dstFile.(*excelize.File), src, dst,
 		int(startRow), int(startCol),
 		int(dstStartRow), int(dstStartCol),
 		int(endRow), int(endCol))
 
-	// Copiar anchos de columna
+	// Copiar anchos de columna (no necesita concurrencia)
 	for j := int(startCol); j <= int(endCol); j++ {
 		srcCol, _ := excelize.ColumnNumberToName(j)
 		dstCol, _ := excelize.ColumnNumberToName(j + colOffset)
-		if width, err := srcFile.GetColWidth(src, srcCol); err == nil && width > 0 {
-			dstFile.SetColWidth(dst, dstCol, dstCol, width)
+		if width, err := srcFile.(*excelize.File).GetColWidth(src, srcCol); err == nil && width > 0 {
+			dstFile.(*excelize.File).SetColWidth(dst, dstCol, dstCol, width)
 		}
 	}
 
-	// Copiar alturas de fila
+	// Copiar alturas de fila (no necesita concurrencia)
 	for i := int(startRow); i <= int(endRow); i++ {
-		if height, err := srcFile.GetRowHeight(src, i); err == nil && height > 0 {
-			dstFile.SetRowHeight(dst, i+rowOffset, height)
+		if height, err := srcFile.(*excelize.File).GetRowHeight(src, i); err == nil && height > 0 {
+			dstFile.(*excelize.File).SetRowHeight(dst, i+rowOffset, height)
 		}
 	}
 
@@ -349,24 +395,33 @@ func Copiar_rango(
 
 // Funciones auxiliares para verificación rápida de tipos numéricos
 func isInteger(s string) bool {
-	for _, c := range s {
+	if s == "" {
+		return false
+	}
+	for i, c := range s {
+		if i == 0 && c == '-' {
+			continue
+		}
 		if c < '0' || c > '9' {
 			return false
 		}
 	}
-	return s != "" && s != "0"
+	return true
 }
 
 func isFloat(s string) bool {
+	if s == "" {
+		return false
+	}
 	dotFound := false
 	for i, c := range s {
+		if i == 0 && c == '-' {
+			continue
+		}
 		if c == '.' && !dotFound {
 			dotFound = true
 		} else if c < '0' || c > '9' {
 			return false
-		}
-		if i == 0 && c == '-' {
-			continue
 		}
 	}
 	return dotFound
@@ -374,11 +429,8 @@ func isFloat(s string) bool {
 
 //export Copiar_hoja
 func Copiar_hoja(srcID C.int, dstID C.int, srcSheet *C.char, dstSheet *C.char, formulas bool) C.int {
-	mu.RLock()
-	srcFile, ok1 := libros[int(srcID)]
-	dstFile, ok2 := libros[int(dstID)]
-	mu.RUnlock()
-
+	srcFile, ok1 := libros.Load(int64(srcID))
+	dstFile, ok2 := libros.Load(int64(dstID))
 	if !ok1 || !ok2 {
 		return -1
 	}
@@ -386,62 +438,85 @@ func Copiar_hoja(srcID C.int, dstID C.int, srcSheet *C.char, dstSheet *C.char, f
 	srcStr := C.GoString(srcSheet)
 	dstStr := C.GoString(dstSheet)
 
-	dstFile.NewSheet(dstStr)
+	dstFile.(*excelize.File).NewSheet(dstStr)
 
-	rows, err := srcFile.GetRows(srcStr)
+	rows, err := srcFile.(*excelize.File).GetRows(srcStr)
 	if err != nil {
 		return -3
 	}
 
-	// Preallocar buffer para nombres de celdas
-	cellNameCache := make(map[[2]int]string)
+	// Usar procesamiento con pool de workers
+	var wg sync.WaitGroup
+	errorChan := make(chan error, 1)
+	var hasError atomic.Bool
 
 	for r, row := range rows {
-		for c, val := range row {
-			// Cachear nombres de celdas
-			key := [2]int{c + 1, r + 1}
-			if cell, exists := cellNameCache[key]; exists {
-				if formulas {
-					if formula, _ := srcFile.GetCellFormula(srcStr, cell); formula != "" {
-						dstFile.SetCellFormula(dstStr, cell, formula)
-						continue
-					}
-				}
-				dstFile.SetCellValue(dstStr, cell, val)
-			} else {
-				cellName, _ := excelize.CoordinatesToCellName(c+1, r+1)
-				cellNameCache[key] = cellName
-				if formulas {
-					if formula, _ := srcFile.GetCellFormula(srcStr, cellName); formula != "" {
-						dstFile.SetCellFormula(dstStr, cellName, formula)
-						continue
-					}
-				}
-				dstFile.SetCellValue(dstStr, cellName, val)
+		wg.Add(1)
+		rowNum := r // Capturar variable para la goroutine
+		rowData := row // Capturar variable para la goroutine
+		
+		workerPool.Submit(func() {
+			defer wg.Done()
+			
+			if hasError.Load() {
+				return // Si hay error, salir
 			}
-		}
+			
+			for c, val := range rowData {
+				if hasError.Load() {
+					return // Si hay error, salir
+				}
+				
+				cellName, _ := excelize.CoordinatesToCellName(c+1, rowNum+1)
+				
+				if formulas {
+					if formula, _ := srcFile.(*excelize.File).GetCellFormula(srcStr, cellName); formula != "" {
+						if err := dstFile.(*excelize.File).SetCellFormula(dstStr, cellName, formula); err != nil {
+							if !hasError.Swap(true) {
+								errorChan <- err
+							}
+							return
+						}
+						continue
+					}
+				}
+				
+				if err := dstFile.(*excelize.File).SetCellValue(dstStr, cellName, val); err != nil {
+					if !hasError.Swap(true) {
+						errorChan <- err
+					}
+					return
+				}
+			}
+		})
 	}
+
+	wg.Wait()
+	close(errorChan)
+	
+	// Verificar si hubo errores
+	if hasError.Load() {
+		return -4
+	}
+
 	return 0
 }
 
 //export Copiar_hoja_completa
 func Copiar_hoja_completa(srcID, dstID C.int, srcSheet *C.char, dstSheet *C.char) C.int {
-	mu.RLock()
-	srcFile, ok1 := libros[int(srcID)]
-	dstFile, ok2 := libros[int(dstID)]
-	mu.RUnlock()
-
+	srcFile, ok1 := libros.Load(int64(srcID))
+	dstFile, ok2 := libros.Load(int64(dstID))
 	if !ok1 || !ok2 {
 		return -1
 	}
 
-	srcIdx, err := srcFile.GetSheetIndex(C.GoString(srcSheet))
+	srcIdx, err := srcFile.(*excelize.File).GetSheetIndex(C.GoString(srcSheet))
 	if err != nil {
 		return -3
 	}
 
-	dstIdx, _ := dstFile.NewSheet(C.GoString(dstSheet))
-	if err := dstFile.CopySheet(srcIdx, dstIdx); err != nil {
+	dstIdx, _ := dstFile.(*excelize.File).NewSheet(C.GoString(dstSheet))
+	if err := dstFile.(*excelize.File).CopySheet(srcIdx, dstIdx); err != nil {
 		return -4
 	}
 	return 0
@@ -449,19 +524,19 @@ func Copiar_hoja_completa(srcID, dstID C.int, srcSheet *C.char, dstSheet *C.char
 
 //export Eliminar_Fila
 func Eliminar_Fila(id C.int, sheetName *C.char, fila C.int) C.int {
-	mu.RLock()
-	file, ok := libros[int(id)]
-	mu.RUnlock()
-
+	file, ok := libros.Load(int64(id))
 	if !ok {
 		return -1
 	}
 
-	err := file.RemoveRow(C.GoString(sheetName), int(fila))
+	err := file.(*excelize.File).RemoveRow(C.GoString(sheetName), int(fila))
 	if err != nil {
 		return -2
 	}
 	return 0
 }
 
-func main() {}
+func main() {
+	// Aseguramos que el pool se cierre al terminar
+	defer workerPool.Close()
+}
