@@ -9,6 +9,7 @@ import "C"
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -427,80 +428,42 @@ func isFloat(s string) bool {
 	return dotFound
 }
 
-//export Copiar_hoja
-func Copiar_hoja(srcID C.int, dstID C.int, srcSheet *C.char, dstSheet *C.char, formulas bool) C.int {
-	srcFile, ok1 := libros.Load(int64(srcID))
-	dstFile, ok2 := libros.Load(int64(dstID))
-	if !ok1 || !ok2 {
-		return -1
+//export Eliminar_Filas_Array
+func Eliminar_Filas_Array(id C.int, sheetName *C.char, filas *C.int, count C.int) C.int {
+	file, ok := libros.Load(int64(id))
+	if !ok {
+		return -1 // libro no encontrado
 	}
 
-	srcStr := C.GoString(srcSheet)
-	dstStr := C.GoString(dstSheet)
+	sheet := C.GoString(sheetName)
+	length := int(count)
 
-	dstFile.(*excelize.File).NewSheet(dstStr)
-
-	rows, err := srcFile.(*excelize.File).GetRows(srcStr)
-	if err != nil {
-		return -3
+	if length == 0 {
+		return 0 // nada que eliminar
 	}
 
-	// Usar procesamiento con pool de workers
-	var wg sync.WaitGroup
-	errorChan := make(chan error, 1)
-	var hasError atomic.Bool
+	// Convertir puntero C a slice de Go
+	rows := (*[1 << 30]C.int)(unsafe.Pointer(filas))[:length:length]
 
-	for r, row := range rows {
-		wg.Add(1)
-		rowNum := r // Capturar variable para la goroutine
-		rowData := row // Capturar variable para la goroutine
-		
-		workerPool.Submit(func() {
-			defer wg.Done()
-			
-			if hasError.Load() {
-				return // Si hay error, salir
-			}
-			
-			for c, val := range rowData {
-				if hasError.Load() {
-					return // Si hay error, salir
-				}
-				
-				cellName, _ := excelize.CoordinatesToCellName(c+1, rowNum+1)
-				
-				if formulas {
-					if formula, _ := srcFile.(*excelize.File).GetCellFormula(srcStr, cellName); formula != "" {
-						if err := dstFile.(*excelize.File).SetCellFormula(dstStr, cellName, formula); err != nil {
-							if !hasError.Swap(true) {
-								errorChan <- err
-							}
-							return
-						}
-						continue
-					}
-				}
-				
-				if err := dstFile.(*excelize.File).SetCellValue(dstStr, cellName, val); err != nil {
-					if !hasError.Swap(true) {
-						errorChan <- err
-					}
-					return
-				}
-			}
-		})
+	// Para evitar problemas con el corrimiento, ordenamos en orden descendente
+	intRows := make([]int, length)
+	for i, r := range rows {
+		intRows[i] = int(r)
 	}
+	sort.Sort(sort.Reverse(sort.IntSlice(intRows)))
 
-	wg.Wait()
-	close(errorChan)
-	
-	// Verificar si hubo errores
-	if hasError.Load() {
-		return -4
+	// Eliminar cada fila
+	for _, row := range intRows {
+		if row <= 0 {
+			continue
+		}
+		if err := file.(*excelize.File).RemoveRow(sheet, row); err != nil {
+			return -2
+		}
 	}
-
 	return 0
 }
+
 
 //export Copiar_hoja_completa
 func Copiar_hoja_completa(srcID, dstID C.int, srcSheet *C.char, dstSheet *C.char) C.int {
